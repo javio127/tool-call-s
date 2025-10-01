@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useToast } from "@/hooks/use-toast"
+// import { useToast } from "@/hooks/use-toast"
 import { 
   Cloud, 
   Sun, 
@@ -58,7 +58,7 @@ export default function WeatherApp() {
   const [loading, setLoading] = useState(false)
   const [weatherData, setWeatherData] = useState<WeatherResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const { toast } = useToast()
+  // const { toast } = useToast()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -85,21 +85,21 @@ export default function WeatherApp() {
 
       if (data.success && data.data) {
         setWeatherData(data.data)
-        toast({
-          title: "Weather data loaded!",
-          description: `Successfully fetched weather for ${data.data.weather_data.location}`,
-        })
+        // toast({
+        //   title: "Weather data loaded!",
+        //   description: `Successfully fetched weather for ${data.data.weather_data.location}`,
+        // })
       } else {
         throw new Error(data.message || 'No weather data received')
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An error occurred'
       setError(errorMessage)
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: errorMessage,
-      })
+      // toast({
+      //   variant: "destructive",
+      //   title: "Error",
+      //   description: errorMessage,
+      // })
     } finally {
       setLoading(false)
     }

@@ -73,7 +73,7 @@ const weatherTool = {
         description: "Visibility unit preference"
       }
     },
-    required: ["latitude", "longitude", "location_name"],
+    required: ["latitude", "longitude", "location_name", "temperature_unit", "wind_unit", "pressure_unit", "visibility_unit"],
     additionalProperties: false
   }
 };
@@ -81,10 +81,18 @@ const weatherTool = {
 // Function to fetch weather data from Open-Meteo API
 async function fetchWeatherData(params: any) {
   try {
-    const { latitude, longitude, temperature_unit = "celsius", wind_unit = "kmh", pressure_unit = "hPa", visibility_unit = "km" } = params;
+    const { 
+      latitude, 
+      longitude, 
+      location_name,
+      temperature_unit = "celsius", 
+      wind_unit = "kmh", 
+      pressure_unit = "hPa", 
+      visibility_unit = "km" 
+    } = params;
     
     // Open-Meteo API endpoint
-    const url = `https://api.open-meteo.com/v1/current?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,cloud_cover,pressure_msl,surface_pressure,wind_speed_10m,wind_direction_10m,visibility&temperature_unit=${temperature_unit}&wind_speed_unit=${wind_unit}&precipitation_unit=mm`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,cloud_cover,pressure_msl,surface_pressure,wind_speed_10m,wind_direction_10m,visibility&temperature_unit=${temperature_unit}&wind_speed_unit=${wind_unit}&precipitation_unit=mm&pressure_unit=${pressure_unit}`;
     
     const response = await fetch(url);
     const data = await response.json();
@@ -178,25 +186,26 @@ export async function POST(request: Request) {
 
     // Use Responses API with tool calling
     const openai = getOpenAIClient();
+    
+    console.log("Tool definition:", JSON.stringify(weatherTool, null, 2));
+    console.log("User query:", query);
+    
     const response = await openai.responses.create({
       model: "gpt-4o-2024-08-06",
       input: [
         {
           role: "system",
-          content: `You are a helpful weather assistant. When users ask about weather, you should:
+          content: `You are a weather assistant. When users ask about weather conditions, you MUST use the get_weather_data tool to fetch real weather data.
 
-1. Extract location information from their query
-2. Use the get_weather_data tool to fetch current weather data
-3. Provide a helpful response with the weather information
+IMPORTANT: Always call the get_weather_data tool when users ask about weather, even if they don't specify exact coordinates. You can use approximate coordinates for major cities.
 
-Common ways users might ask for weather:
-- "What's the weather in Paris?"
-- "How's the weather in New York City?"
-- "Tell me about the weather in London"
-- "Weather forecast for Tokyo"
-- "Is it raining in San Francisco?"
+Examples of queries that require tool calls:
+- "What's the weather in Paris?" → Call tool with Paris coordinates (48.8566, 2.3522)
+- "How's the weather in New York?" → Call tool with NYC coordinates (40.7128, -74.0060)
+- "Weather in London" → Call tool with London coordinates (51.5074, -0.1278)
+- "Is it raining in Tokyo?" → Call tool with Tokyo coordinates (35.6762, 139.6503)
 
-Always use the tool to get real weather data. If you can't determine a location, ask the user to specify.`
+You have access to the get_weather_data tool. Use it whenever weather information is requested.`
         },
         {
           role: "user", 
@@ -206,80 +215,95 @@ Always use the tool to get real weather data. If you can't determine a location,
       tools: [weatherTool],
       tool_choice: "auto"
     });
+    
+    console.log("Response:", JSON.stringify(response, null, 2));
 
     // Check if the model made a tool call
     if (response.output && response.output.length > 0) {
       const output = response.output[0];
       
-      if (output.type === "message" && output.content) {
-        for (const content of output.content) {
-          if ('tool_call' in content && content.tool_call) {
-            // Execute the weather tool
-            const toolCall = content.tool_call as any;
-            
-            if (toolCall.function?.name === "get_weather_data") {
-              const args = JSON.parse(toolCall.function.arguments);
-              
-              try {
-                const weatherData = await fetchWeatherData(args);
-                
-                // Use structured outputs to format the response
-                const structuredResponse = await openai.responses.parse({
-                  model: "gpt-4o-2024-08-06",
-                  input: [
-                    {
-                      role: "system",
-                      content: "Format the weather data into a structured response with helpful information for the user."
-                    },
-                    {
-                      role: "user",
-                      content: `Here's the weather data: ${JSON.stringify(weatherData)}. Please provide a helpful response to the user's query: "${query}"`
-                    }
-                  ],
-                  text: {
-                    format: {
-                      type: "json_schema",
-                      name: "weather_response",
-                      schema: {
-                        type: "object",
-                        properties: {
-                          weather_data: WeatherDataSchema.shape,
-                          summary: {
-                            type: "string",
-                            description: "Brief weather summary"
-                          },
-                          recommendations: {
-                            type: "array",
-                            items: { type: "string" },
-                            description: "Weather-based recommendations (e.g., clothing, activities)"
-                          },
-                          additional_info: {
-                            type: "string", 
-                            description: "Any additional helpful information"
-                          }
-                        },
-                        required: ["weather_data", "summary", "recommendations", "additional_info"],
-                        additionalProperties: false
+      if (output.type === "function_call" && output.name === "get_weather_data") {
+        // Execute the weather tool
+        const args = JSON.parse(output.arguments);
+        
+        try {
+          const weatherData = await fetchWeatherData(args);
+          
+          // Use structured outputs to format the response
+          const structuredResponse = await openai.responses.parse({
+            model: "gpt-4o-2024-08-06",
+            input: [
+              {
+                role: "system",
+                content: "Format the weather data into a structured response with helpful information for the user."
+              },
+              {
+                role: "user",
+                content: `Here's the weather data: ${JSON.stringify(weatherData)}. Please provide a helpful response to the user's query: "${query}"`
+              }
+            ],
+            text: {
+              format: {
+                type: "json_schema",
+                name: "weather_response",
+                schema: {
+                  type: "object",
+                  properties: {
+                    weather_data: {
+                      type: "object",
+                      properties: {
+                        location: { type: "string" },
+                        temperature: { type: "number" },
+                        temperature_unit: { type: "string" },
+                        condition: { type: "string" },
+                        humidity: { type: "number" },
+                        wind_speed: { type: "number" },
+                        wind_unit: { type: "string" },
+                        wind_direction: { type: "number" },
+                        pressure: { type: "number" },
+                        pressure_unit: { type: "string" },
+                        visibility: { type: "number" },
+                        visibility_unit: { type: "string" },
+                        cloud_cover: { type: "number" },
+                        precipitation: { type: "number" },
+                        apparent_temperature: { type: "number" }
                       },
-                      strict: true
+                      required: ["location", "temperature", "temperature_unit", "condition", "humidity", "wind_speed", "wind_unit", "wind_direction", "pressure", "pressure_unit", "visibility", "visibility_unit", "cloud_cover", "precipitation", "apparent_temperature"],
+                      additionalProperties: false
+                    },
+                    summary: {
+                      type: "string",
+                      description: "Brief weather summary"
+                    },
+                    recommendations: {
+                      type: "array",
+                      items: { type: "string" },
+                      description: "Weather-based recommendations (e.g., clothing, activities)"
+                    },
+                    additional_info: {
+                      type: "string", 
+                      description: "Any additional helpful information"
                     }
-                  }
-                });
-                
-                return Response.json({
-                  success: true,
-                  data: structuredResponse.output_parsed,
-                  raw_weather: weatherData
-                });
-                
-              } catch (error) {
-                return Response.json({
-                  error: "Failed to fetch weather data",
-                  details: error instanceof Error ? error.message : "Unknown error"
-                }, { status: 500 });
+                  },
+                  required: ["weather_data", "summary", "recommendations", "additional_info"],
+                  additionalProperties: false
+                },
+                strict: true
               }
             }
-          }
+          });
+          
+          return Response.json({
+            success: true,
+            data: structuredResponse.output_parsed,
+            raw_weather: weatherData
+          });
+          
+        } catch (error) {
+          return Response.json({
+            error: "Failed to fetch weather data",
+            details: error instanceof Error ? error.message : "Unknown error"
+          }, { status: 500 });
         }
       }
     }
